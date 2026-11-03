@@ -79,7 +79,20 @@ def load_inventory(file):
       col_map[col] = "Darkstore"
     elif "last 30 days" in cl:
       col_map[col] = "Last 30 Days Sales"
-  return df.rename(columns=col_map)
+  df = df.rename(columns=col_map)
+
+  # CRITICAL FIX: Aggregate inventory across multiple warehouse facilities per Item ID
+  df_agg = (
+      df.groupby(["Item ID", "Brand Name", "Item Name", "UoM"])
+      .agg(
+          Total_Sellable=("Total Sellable", "sum"),
+          Warehouse=("Warehouse", "sum"),
+          Darkstore=("Darkstore", "sum"),
+          Last_30_Days_Sales=("Last 30 Days Sales", "sum"),
+      )
+      .reset_index()
+  )
+  return df_agg
 
 
 @st.cache_data
@@ -143,13 +156,9 @@ if inv_file is not None and sales_file is not None:
     )
 
     # --- EXECUTIVE OVERVIEW KPIs (2 Rows) ---
-    tot_sellable = (
-        int(inv_df["Total Sellable"].sum())
-        if "Total Sellable" in inv_df.columns
-        else 0
-    )
-    tot_wh = int(inv_df["Warehouse"].sum()) if "Warehouse" in inv_df.columns else 0
-    tot_ds = int(inv_df["Darkstore"].sum()) if "Darkstore" in inv_df.columns else 0
+    tot_sellable = int(inv_df["Total_Sellable"].sum())
+    tot_wh = int(inv_df["Warehouse"].sum())
+    tot_ds = int(inv_df["Darkstore"].sum())
     tot_rev = (
         sales_df["Total Gross Bill Amount"].sum()
         if "Total Gross Bill Amount" in sales_df.columns
@@ -163,13 +172,11 @@ if inv_file is not None and sales_file is not None:
     st.markdown("---")
     st.subheader("📌 Executive Dashboard Overview")
 
-    # Row 1: Stock Metrics
     r1_c1, r1_c2, r1_c3 = st.columns(3)
     r1_c1.metric("Total Sellable Inv", f"{tot_sellable:,}")
     r1_c2.metric("Warehouse Quantity", f"{tot_wh:,}")
     r1_c3.metric("Darkstore Quantity", f"{tot_ds:,}")
 
-    # Row 2: Sales & Geographic Metrics
     r2_c1, r2_c2, r2_c3 = st.columns(3)
     r2_c1.metric("Total Gross Revenue", f"₹{tot_rev:,.2f}")
     r2_c2.metric("Total Mapped Orders", f"{tot_orders:,}")
@@ -213,39 +220,28 @@ if inv_file is not None and sales_file is not None:
         "📦 Product-Wise Expandable State Metrics",
     ])
 
-    # --- OVERVIEW TAB: Unique Item Name Summary ---
+    # --- TAB 1: Unique Item Summary ---
     with tab_ov:
       st.subheader("Unique Item Overview (Metrics in Columns)")
-      st.markdown(
-          "Clean product-level summary showing states catered, inventory"
-          " levels, and 30-day sales velocity."
-      )
-
       overview_df = (
           merged_item.groupby("Item Name")
           .agg(
               States_Catered=("States_Catered_Count", "max"),
-              Total_Sellable=("Total Sellable", "sum"),
+              Total_Sellable=("Total_Sellable", "sum"),
               Warehouse_Quantity=("Warehouse", "sum"),
               Darkstore_Quantity=("Darkstore", "sum"),
-              Last_30_Days_Inv_Sales=("Last 30 Days Sales", "sum"),
+              Last_30_Days_Inv_Sales=("Last_30_Days_Sales", "sum"),
               Mapped_Sales_Orders=("Total_Sales_Orders", "sum"),
               Total_Qty_Sold=("Total_Qty_Sold", "sum"),
               Total_Gross_Revenue=("Total_Revenue", "sum"),
           )
           .reset_index()
       )
-
       st.dataframe(overview_df, use_container_width=True, hide_index=True)
 
-    # --- TAB: PRODUCT STATE COVERAGE & DRILLDOWN ---
+    # --- TAB 2: Product State Coverage & Drilldown ---
     with tab_ps:
       st.subheader("Item State Catering & Interactive Breakdown")
-      st.markdown(
-          "Select an **Item Name** from the dropdown filter to expand its"
-          " state-wise fulfillment, inventory distribution, and sales units."
-      )
-
       available_items = sorted(
           merged_item["Item Name"].dropna().unique().tolist()
       )
@@ -272,7 +268,7 @@ if inv_file is not None and sales_file is not None:
                     "Brand Name",
                     "Item Name",
                     "UoM",
-                    "Total Sellable",
+                    "Total_Sellable",
                     "Warehouse",
                     "Darkstore",
                 ]],
@@ -280,7 +276,12 @@ if inv_file is not None and sales_file is not None:
                 on="Item ID",
                 how="left",
             )
-            .rename(columns={state_col: "Catered State"})
+            .rename(
+                columns={
+                    state_col: "Catered State",
+                    "Total_Sellable": "Total Sellable",
+                }
+            )
             .fillna(0)
         )
 
@@ -288,7 +289,7 @@ if inv_file is not None and sales_file is not None:
             merged_item.groupby(["Brand Name", "Item Name", "UoM"])
             .agg(
                 Total_States_Catered=("States_Catered_Count", "max"),
-                Total_Sellable=("Total Sellable", "sum"),
+                Total_Sellable=("Total_Sellable", "sum"),
                 Warehouse_Stock=("Warehouse", "sum"),
                 Darkstore_Stock=("Darkstore", "sum"),
                 Total_30D_Orders=("Total_Sales_Orders", "sum"),
@@ -305,14 +306,12 @@ if inv_file is not None and sales_file is not None:
           filtered_breakdown = ps_full[
               ps_full["Item Name"] == selected_product
           ]
-
           st.markdown(
               f"#### 📌 Selected Product Overview: `{selected_product}`"
           )
           st.dataframe(
               filtered_summary, use_container_width=True, hide_index=True
           )
-
           st.markdown(
               f"#### 🌐 States Catered Breakdown for `{selected_product}`"
           )
@@ -338,7 +337,6 @@ if inv_file is not None and sales_file is not None:
               use_container_width=True,
               hide_index=True,
           )
-
           st.markdown("#### 🌐 Complete Product-State Breakdown Table")
           st.dataframe(
               ps_full[[
@@ -356,54 +354,30 @@ if inv_file is not None and sales_file is not None:
               hide_index=True,
           )
       else:
-        st.warning("No state column available for product-state drilldown.")
+        st.warning("No state column available.")
         ps_full = pd.DataFrame()
 
-    # --- TAB 1: Variation (Brand, Item, Pack/UoM) ---
-    with tab1:
+    # --- TAB 3: SKU Variation & Sales Mapping ---
+    with tab1 := st.container():
+      pass
+    with st.container():
       st.subheader("SKU Variation Inventory & Sales Mapping")
-      st.markdown(
-          "Granular breakdown formatted as **Brand Name | Item Name |"
-          " Variation (UoM)** with respective stock levels and sales"
-          " performance."
-      )
-
-      tab1_cols = [
-          "Brand Name",
-          "Item Name",
-          "UoM",
-          "States_Catered_Count",
-          "Total Sellable",
-          "Warehouse",
-          "Darkstore",
-          "Last 30 Days Sales",
-          "Total_Sales_Orders",
-          "Total_Qty_Sold",
-          "Total_Revenue",
-      ]
-      existing_tab1_cols = [c for c in tab1_cols if c in merged_item.columns]
-
-      tab1_df = merged_item[existing_tab1_cols].rename(
+      tab1_df = merged_item.rename(
           columns={
               "UoM": "Variation (Pack Size)",
+              "Total_Sellable": "Total Sellable",
               "States_Catered_Count": "States Catered",
-              "Last 30 Days Sales": "Last 30D Inv Movement",
+              "Last_30_Days_Sales": "Last 30D Inv Movement",
               "Total_Sales_Orders": "30D Mapped Orders",
               "Total_Qty_Sold": "30D Units Sold",
               "Total_Revenue": "30D Revenue (Rs)",
           }
       )
-
       st.dataframe(tab1_df, use_container_width=True, hide_index=True)
 
-    # --- TAB 2: State-Wise Matrix ---
-    with tab2:
+    # --- TAB 4: State-Wise Matrix ---
+    with st.container():
       st.subheader("State-Wise Matrix (States Above Metrics)")
-      st.markdown(
-          "Scroll right to view state performance. **Item Name** stays fixed on"
-          " the left."
-      )
-
       if state_col:
         sales_state_pivot = sales_df.pivot_table(
             index="Item ID",
@@ -416,11 +390,9 @@ if inv_file is not None and sales_file is not None:
             },
             fill_value=0,
         )
-
         sales_state_pivot.columns = sales_state_pivot.columns.set_levels(
             ["Orders", "Qty Sold", "Revenue (Rs)"], level=0
         )
-
         flat_cols = [
             f"{state} - {metric}" for metric, state in sales_state_pivot.columns
         ]
@@ -429,12 +401,12 @@ if inv_file is not None and sales_file is not None:
 
         state_matrix_df = (
             pd.merge(
-                inv_df[[
+                merged_item[[
                     "Item ID",
                     "Brand Name",
                     "Item Name",
                     "UoM",
-                    "Total Sellable",
+                    "Total_Sellable",
                     "Warehouse",
                     "Darkstore",
                 ]],
@@ -443,9 +415,9 @@ if inv_file is not None and sales_file is not None:
                 how="left",
             )
             .fillna(0)
+            .rename(columns={"Total_Sellable": "Total Sellable"})
             .drop(columns=["Item ID"])
         )
-
         st.dataframe(
             state_matrix_df,
             use_container_width=True,
@@ -456,23 +428,16 @@ if inv_file is not None and sales_file is not None:
             },
         )
       else:
-        st.warning("State column missing.")
         state_matrix_df = pd.DataFrame()
 
-    # --- TAB 5: PRODUCT-WISE EXPANDABLE STATE METRICS ---
-    with tab_prod:
+    # --- TAB 5: Product-Wise Expandable State Metrics ---
+    with st.container():
       st.subheader("📦 Product-Wise Metrics & State Breakdown")
-      st.markdown(
-          "Product-focused view. Click on any **Product Name** expander below to"
-          " reveal its state-wise metrics, inventory, orders, and sales"
-          " revenue."
-      )
-
       prod_summary = (
           merged_item.groupby("Item Name")
           .agg(
               States_Catered=("States_Catered_Count", "max"),
-              Total_Sellable=("Total Sellable", "sum"),
+              Total_Sellable=("Total_Sellable", "sum"),
               Warehouse_Stock=("Warehouse", "sum"),
               Darkstore_Stock=("Darkstore", "sum"),
               Total_Orders=("Total_Sales_Orders", "sum"),
@@ -481,7 +446,6 @@ if inv_file is not None and sales_file is not None:
           )
           .reset_index()
       )
-
       st.markdown("#### 📋 Product High-Level Summary")
       st.dataframe(prod_summary, use_container_width=True, hide_index=True)
 
@@ -497,20 +461,19 @@ if inv_file is not None and sales_file is not None:
             .reset_index()
             .rename(columns={state_col: "State"})
         )
-
         ps_merged_full = pd.merge(
             merged_item[[
                 "Item ID",
                 "Item Name",
                 "UoM",
-                "Total Sellable",
+                "Total_Sellable",
                 "Warehouse",
                 "Darkstore",
             ]],
             ps_df,
             on="Item ID",
             how="left",
-        ).fillna(0)
+        ).rename(columns={"Total_Sellable": "Total Sellable"}).fillna(0)
 
         for prod_name in sorted(merged_item["Item Name"].unique()):
           prod_sub_df = ps_merged_full[
@@ -563,12 +526,6 @@ if inv_file is not None and sales_file is not None:
     # --- MASTER EXPORT SECTION ---
     st.markdown("---")
     st.markdown("### 📥 Download Formatted Master Excel Report")
-    st.markdown(
-        "Export all cleaned analysis tabs with dark navy headers, cell"
-        " borders, first column left-aligned, other cells middle-aligned, and"
-        " auto-fitted columns."
-    )
-
     excel_buf = io.BytesIO()
     with pd.ExcelWriter(excel_buf, engine="openpyxl") as writer:
       overview_df.to_excel(
@@ -578,7 +535,9 @@ if inv_file is not None and sales_file is not None:
         ps_full.drop(columns=["Item ID"], errors="ignore").to_excel(
             writer, sheet_name="Product_State_Breakdown", index=False
         )
-      tab1_df.to_excel(writer, sheet_name="SKU_Variation_Sales", index=False)
+      tab1_df.drop(columns=["Item ID"], errors="ignore").to_excel(
+          writer, sheet_name="SKU_Variation_Sales", index=False
+      )
       if not state_matrix_df.empty:
         state_matrix_df.to_excel(
             writer, sheet_name="State_Wise_Matrix", index=False
