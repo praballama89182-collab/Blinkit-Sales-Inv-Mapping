@@ -1,0 +1,1 @@
+Inventory mapping with sales
