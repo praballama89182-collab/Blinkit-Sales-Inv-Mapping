@@ -81,7 +81,7 @@ def load_inventory(file):
       col_map[col] = "Last 30 Days Sales"
   df = df.rename(columns=col_map)
 
-  # CRITICAL FIX: Aggregate inventory across multiple warehouse facilities per Item ID
+  # CRITICAL: Aggregate inventory across multiple warehouse facilities per Item ID
   df_agg = (
       df.groupby(["Item ID", "Brand Name", "Item Name", "UoM"])
       .agg(
@@ -358,9 +358,7 @@ if inv_file is not None and sales_file is not None:
         ps_full = pd.DataFrame()
 
     # --- TAB 3: SKU Variation & Sales Mapping ---
-    with tab1 := st.container():
-      pass
-    with st.container():
+    with tab1:
       st.subheader("SKU Variation Inventory & Sales Mapping")
       tab1_df = merged_item.rename(
           columns={
@@ -376,7 +374,7 @@ if inv_file is not None and sales_file is not None:
       st.dataframe(tab1_df, use_container_width=True, hide_index=True)
 
     # --- TAB 4: State-Wise Matrix ---
-    with st.container():
+    with tab2:
       st.subheader("State-Wise Matrix (States Above Metrics)")
       if state_col:
         sales_state_pivot = sales_df.pivot_table(
@@ -401,7 +399,7 @@ if inv_file is not None and sales_file is not None:
 
         state_matrix_df = (
             pd.merge(
-                merged_item[[
+                inv_df[[
                     "Item ID",
                     "Brand Name",
                     "Item Name",
@@ -431,7 +429,7 @@ if inv_file is not None and sales_file is not None:
         state_matrix_df = pd.DataFrame()
 
     # --- TAB 5: Product-Wise Expandable State Metrics ---
-    with st.container():
+    with tab_prod:
       st.subheader("📦 Product-Wise Metrics & State Breakdown")
       prod_summary = (
           merged_item.groupby("Item Name")
@@ -461,19 +459,23 @@ if inv_file is not None and sales_file is not None:
             .reset_index()
             .rename(columns={state_col: "State"})
         )
-        ps_merged_full = pd.merge(
-            merged_item[[
-                "Item ID",
-                "Item Name",
-                "UoM",
-                "Total_Sellable",
-                "Warehouse",
-                "Darkstore",
-            ]],
-            ps_df,
-            on="Item ID",
-            how="left",
-        ).rename(columns={"Total_Sellable": "Total Sellable"}).fillna(0)
+        ps_merged_full = (
+            pd.merge(
+                merged_item[[
+                    "Item ID",
+                    "Item Name",
+                    "UoM",
+                    "Total_Sellable",
+                    "Warehouse",
+                    "Darkstore",
+                ]],
+                ps_df,
+                on="Item ID",
+                how="left",
+            )
+            .rename(columns={"Total_Sellable": "Total Sellable"})
+            .fillna(0)
+        )
 
         for prod_name in sorted(merged_item["Item Name"].unique()):
           prod_sub_df = ps_merged_full[
