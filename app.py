@@ -45,6 +45,21 @@ sales_file = st.sidebar.file_uploader(
     "Upload Sales Summary Report (.xlsx)", type=["xlsx", "xls"]
 )
 
+# Warehouse Facility to State Mapping
+FACILITY_STATE_MAP = {
+    "Bengaluru B3": "Karnataka",
+    "Bengaluru B5": "Karnataka",
+    "Kundli Feeder": "Haryana",
+    "Hyderabad H3 - Feeder": "Telangana",
+    "Chennai C5 - Feeder": "Tamil Nadu",
+    "Pune P3 - Feeder Warehouse": "Maharashtra",
+    "Kolkata K6 - Feeder Warehouse": "West Bengal",
+    "Faridabad - Feeder": "Haryana",
+    "Mumbai M12 - Feeder Warehouse": "Maharashtra",
+    "Mumbai M10 - Feeder": "Maharashtra",
+    "Ahmedabad A2 - Feeder": "Gujarat",
+}
+
 
 @st.cache_data
 def load_inventory(file):
@@ -71,6 +86,8 @@ def load_inventory(file):
       col_map[col] = "UPC"
     elif "uom" in cl:
       col_map[col] = "UoM"
+    elif "warehouse facility name" in cl:
+      col_map[col] = "Warehouse Facility Name"
     elif "total sellable" in cl:
       col_map[col] = "Total Sellable"
     elif cl == "warehouse":
@@ -80,19 +97,7 @@ def load_inventory(file):
     elif "last 30 days" in cl:
       col_map[col] = "Last 30 Days Sales"
   df = df.rename(columns=col_map)
-
-  # CRITICAL: Aggregate inventory across multiple warehouse facilities per Item ID
-  df_agg = (
-      df.groupby(["Item ID", "Brand Name", "Item Name", "UoM"])
-      .agg(
-          Total_Sellable=("Total Sellable", "sum"),
-          Warehouse=("Warehouse", "sum"),
-          Darkstore=("Darkstore", "sum"),
-          Last_30_Days_Sales=("Last 30 Days Sales", "sum"),
-      )
-      .reset_index()
-  )
-  return df_agg
+  return df
 
 
 @st.cache_data
@@ -144,7 +149,7 @@ def style_excel(ws, header_color="1F4E78"):
 
 if inv_file is not None and sales_file is not None:
   try:
-    inv_df = load_inventory(inv_file)
+    inv_raw = load_inventory(inv_file)
     sales_df = load_sales(sales_file)
 
     state_col = (
@@ -155,10 +160,29 @@ if inv_file is not None and sales_file is not None:
         else None
     )
 
+    # Map Facility Name to State
+    inv_raw["Facility State"] = (
+        inv_raw["Warehouse Facility Name"]
+        .map(FACILITY_STATE_MAP)
+        .fillna("Delhi-NCR / Other")
+    )
+
+    # Aggregated Inventory across facilities for summary
+    inv_summary = (
+        inv_raw.groupby(["Item ID", "Brand Name", "Item Name", "UoM"])
+        .agg(
+            Total_Sellable=("Total Sellable", "sum"),
+            Warehouse=("Warehouse", "sum"),
+            Darkstore=("Darkstore", "sum"),
+            Last_30_Days_Sales=("Last 30 Days Sales", "sum"),
+        )
+        .reset_index()
+    )
+
     # --- EXECUTIVE OVERVIEW KPIs (2 Rows) ---
-    tot_sellable = int(inv_df["Total_Sellable"].sum())
-    tot_wh = int(inv_df["Warehouse"].sum())
-    tot_ds = int(inv_df["Darkstore"].sum())
+    tot_sellable = int(inv_summary["Total_Sellable"].sum())
+    tot_wh = int(inv_summary["Warehouse"].sum())
+    tot_ds = int(inv_summary["Darkstore"].sum())
     tot_rev = (
         sales_df["Total Gross Bill Amount"].sum()
         if "Total Gross Bill Amount" in sales_df.columns
@@ -195,7 +219,7 @@ if inv_file is not None and sales_file is not None:
     )
 
     merged_item = pd.merge(
-        inv_df, sales_orders_item, on="Item ID", how="left"
+        inv_summary, sales_orders_item, on="Item ID", how="left"
     ).fillna(0)
 
     if state_col:
@@ -217,7 +241,7 @@ if inv_file is not None and sales_file is not None:
         "🔍 Product State Coverage & Breakdown",
         "📦 SKU Variation & Sales Mapping",
         "🗺️ State-Wise Inventory & Sales Matrix",
-        "📦 Product-Wise Expandable State Metrics",
+        "📦 Item-Wise State-Wise Breakdown",
     ])
 
     # --- TAB 1: Unique Item Summary ---
@@ -399,7 +423,7 @@ if inv_file is not None and sales_file is not None:
 
         state_matrix_df = (
             pd.merge(
-                inv_df[[
+                inv_summary[[
                     "Item ID",
                     "Brand Name",
                     "Item Name",
@@ -428,102 +452,78 @@ if inv_file is not None and sales_file is not None:
       else:
         state_matrix_df = pd.DataFrame()
 
-    # --- TAB 5: Product-Wise Expandable State Metrics ---
+    # --- TAB 5: Item-Wise State-Wise Detailed Breakdown ---
     with tab_prod:
-      st.subheader("📦 Product-Wise Metrics & State Breakdown")
-      prod_summary = (
-          merged_item.groupby("Item Name")
+      st.subheader("📦 Item-Wise & State-Wise Detailed Breakdown")
+      st.markdown(
+          "Detailed breakdown mapping each **Item Name & Variation (UoM)**"
+          " across each **State** (derived from regional warehouse facilities"
+          " and sales orders) with respective Sellable, Warehouse, Darkstore"
+          " quantities, and sales metrics."
+      )
+
+      inv_state_detail = (
+          inv_raw.groupby(
+              ["Item ID", "Brand Name", "Item Name", "UoM", "Facility State"]
+          )
           .agg(
-              States_Catered=("States_Catered_Count", "max"),
-              Total_Sellable=("Total_Sellable", "sum"),
-              Warehouse_Stock=("Warehouse", "sum"),
-              Darkstore_Stock=("Darkstore", "sum"),
-              Total_Orders=("Total_Sales_Orders", "sum"),
-              Total_Units_Sold=("Total_Qty_Sold", "sum"),
-              Total_Revenue=("Total_Revenue", "sum"),
+              Sellable=("Total Sellable", "sum"),
+              Warehouse=("Warehouse", "sum"),
+              Darkstore=("Darkstore", "sum"),
           )
           .reset_index()
+          .rename(columns={"Facility State": "State"})
       )
-      st.markdown("#### 📋 Product High-Level Summary")
-      st.dataframe(prod_summary, use_container_width=True, hide_index=True)
 
-      st.markdown("#### 🔽 Interactive Expandable Product State Metrics")
-      if state_col:
-        ps_df = (
-            sales_df.groupby(["Item ID", state_col])
-            .agg(
-                State_Units_Sold=("Quantity", "sum"),
-                State_Orders=("Order Id", "nunique"),
-                State_Revenue=("Total Gross Bill Amount", "sum"),
-            )
-            .reset_index()
-            .rename(columns={state_col: "State"})
-        )
-        ps_merged_full = (
-            pd.merge(
-                merged_item[[
-                    "Item ID",
-                    "Item Name",
-                    "UoM",
-                    "Total_Sellable",
-                    "Warehouse",
-                    "Darkstore",
-                ]],
-                ps_df,
-                on="Item ID",
-                how="left",
-            )
-            .rename(columns={"Total_Sellable": "Total Sellable"})
-            .fillna(0)
-        )
+      sales_state_detail = (
+          sales_df.groupby(["Item ID", state_col])
+          .agg(
+              Orders=("Order Id", "nunique"),
+              Units_Sold=("Quantity", "sum"),
+              Revenue_Rs=("Total Gross Bill Amount", "sum"),
+          )
+          .reset_index()
+          .rename(columns={state_col: "State"})
+      )
 
-        for prod_name in sorted(merged_item["Item Name"].unique()):
-          prod_sub_df = ps_merged_full[
-              ps_merged_full["Item Name"] == prod_name
-          ]
-          tot_p_sellable = (
-              int(prod_sub_df["Total Sellable"].iloc[0])
-              if not prod_sub_df.empty
-              else 0
-          )
-          tot_p_wh = (
-              int(prod_sub_df["Warehouse"].iloc[0])
-              if not prod_sub_df.empty
-              else 0
-          )
-          tot_p_ds = (
-              int(prod_sub_df["Darkstore"].iloc[0])
-              if not prod_sub_df.empty
-              else 0
-          )
-          tot_p_rev = prod_sub_df["State_Revenue"].sum()
-          n_states = prod_sub_df["State"].nunique()
+      item_state_master = pd.merge(
+          inv_state_detail, sales_state_detail, on=["Item ID", "State"], how="outer"
+      ).fillna({
+          "Sellable": 0,
+          "Warehouse": 0,
+          "Darkstore": 0,
+          "Orders": 0,
+          "Units_Sold": 0,
+          "Revenue_Rs": 0,
+      })
 
-          with st.expander(
-              f"📦 **{prod_name}** | States: {n_states} | Sellable:"
-              f" {tot_p_sellable} | WH: {tot_p_wh} | DS: {tot_p_ds} | Rev:"
-              f" ₹{tot_p_rev:,.2f}"
-          ):
-            display_state_sub = prod_sub_df[[
-                "State",
-                "UoM",
-                "Total Sellable",
-                "Warehouse",
-                "Darkstore",
-                "State_Units_Sold",
-                "State_Orders",
-                "State_Revenue",
-            ]].rename(
-                columns={
-                    "UoM": "Variation (Pack)",
-                    "State_Units_Sold": "Units Sold",
-                    "State_Orders": "Orders",
-                    "State_Revenue": "Revenue (Rs)",
-                }
-            )
-            st.dataframe(
-                display_state_sub, use_container_width=True, hide_index=True
-            )
+      item_state_master["Item Name"] = item_state_master["Item Name"].fillna(
+          "Unknown Product"
+      )
+      item_state_master["Brand Name"] = item_state_master["Brand Name"].fillna(
+          "Brand"
+      )
+      item_state_master["UoM"] = item_state_master["UoM"].fillna("N/A")
+
+      item_state_display = item_state_master[[
+          "Brand Name",
+          "Item Name",
+          "UoM",
+          "State",
+          "Sellable",
+          "Warehouse",
+          "Darkstore",
+          "Orders",
+          "Units_Sold",
+          "Revenue_Rs",
+      ]].rename(
+          columns={
+              "UoM": "Variation (Pack)",
+              "Revenue_Rs": "Revenue (Rs)",
+          }
+      )
+
+      st.dataframe(item_state_display, use_container_width=True, hide_index=True)
 
     # --- MASTER EXPORT SECTION ---
     st.markdown("---")
@@ -544,8 +544,8 @@ if inv_file is not None and sales_file is not None:
         state_matrix_df.to_excel(
             writer, sheet_name="State_Wise_Matrix", index=False
         )
-      prod_summary.to_excel(
-          writer, sheet_name="Product_Wise_Summary", index=False
+      item_state_display.to_excel(
+          writer, sheet_name="Item_State_Detailed_Breakdown", index=False
       )
 
       wb = writer.book
