@@ -191,7 +191,6 @@ if inv_file is not None and sales_file is not None:
         inv_df, sales_orders_item, on="Item ID", how="left"
     ).fillna(0)
 
-    # Add state coverage count per item
     if state_col:
       item_state_counts = (
           sales_df.groupby("Item ID")[state_col]
@@ -489,14 +488,14 @@ if inv_file is not None and sales_file is not None:
       st.markdown("#### 🔽 Interactive Expandable Product State Metrics")
       if state_col:
         ps_df = (
-            sales_df.groupby(["Item Id", state_col])
+            sales_df.groupby(["Item ID", state_col])
             .agg(
                 State_Units_Sold=("Quantity", "sum"),
                 State_Orders=("Order Id", "nunique"),
                 State_Revenue=("Total Gross Bill Amount", "sum"),
             )
             .reset_index()
-            .rename(columns={"Item Id": "Item ID", state_col: "State"})
+            .rename(columns={state_col: "State"})
         )
 
         ps_merged_full = pd.merge(
